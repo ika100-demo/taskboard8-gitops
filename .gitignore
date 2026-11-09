@@ -1,0 +1,13 @@
+.devbox/
+.venv/
+__pycache__/
+.env
+.env.local
+.DS_Store
+*.log
+.alert-poll/
+
+# Claude Code: agent worktrees, local settings and locks are never committed
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/settings.local.json
