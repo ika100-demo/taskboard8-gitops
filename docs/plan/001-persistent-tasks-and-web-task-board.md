@@ -19,7 +19,7 @@ repos:
     arguments: |
       Storage only changes: the HTTP contract of spec 001-create-and-list-tasks (docs/specs/001-create-and-list-tasks/design.md)
       stays exactly as it is, and its acceptance tests stay green, now against Postgres.
-      Config: `DATABASE_URL` (CloudNativePG form `postgresql://user:pass@host:5432/db`; PG* are injected too). If your driver
+      Config: `DATABASE_URL` (CloudNativePG URL with scheme `postgresql://`, user, password, host, port 5432 and database; PG* are injected too). If your driver
       needs `postgresql+psycopg://`, rewrite the scheme in code, never in gitops. Missing `DATABASE_URL` = database unreachable.
       Schema: ensured idempotently on the first successful connection (not only at start-up), guarded by a Postgres advisory
       lock so two replicas starting together do not race. Order by a database-generated monotonically increasing column
