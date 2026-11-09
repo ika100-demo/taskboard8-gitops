@@ -1,7 +1,7 @@
 ---
 spec_id: 001-persistent-tasks-and-web-task-board
 title: Persistent tasks and web task board
-status: approved
+status: done
 priority: P1
 shape: gitops-app
 ---
@@ -64,3 +64,5 @@ As a person using the task board, I want to add a task with a title and an optio
 
 - 2026-11-09 created
 - 2026-11-09 approved
+- 2026-11-10 building
+- 2026-11-10 done

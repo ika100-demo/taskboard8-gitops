@@ -3,67 +3,115 @@ plan_id: 001-persistent-tasks-and-web-task-board
 spec: 001-persistent-tasks-and-web-task-board
 feature: Tasks kept in a system Postgres database, and a web task board to list and add them
 gitops_app: ika100-demo/taskboard8-gitops
-status: draft
+status: completed
 repos:
-  - id: taskboard8-api
-    shape: service-python
-    summary: Keep tasks in Postgres so they survive restarts and are shared by every instance
-    acs: [AC-001.1, AC-001.2, AC-001.3]
-    criteria:
-      - "Given three tasks created through `POST /tasks` against a database, when the service is stopped and a new service process is started against the same database (`DATABASE_URL`), then `GET /tasks` answers `200` with exactly those three tasks, each with the same `id`, `title` and `due_date`, in the order they were created (system AC-001.1)"
-      - "Given two service instances connected to the same database, when a task is created through `POST /tasks` on one of them, then every later `GET /tasks` on either instance contains that task, and tasks created alternately on both instances are listed by both in the one order they were created (system AC-001.2)"
-      - "Given an empty database, when a client sends `GET /tasks`, then the answer is `200` with `[]`; and every rule of the unchanged task contract (`201` body with exactly `id`, `title`, `due_date`; trimmed titles; `422` for an invalid title or due date with nothing stored) holds with tasks kept in the database (system AC-001.1)"
-      - "Given the database is unreachable (stopped, wrong host, or `DATABASE_URL` unset), when a client sends `GET /tasks` or a valid `POST /tasks`, then the answer is `503` within 5 seconds and no task is created; an invalid `POST /tasks` still answers `422` (system AC-001.3)"
-      - "Given the database is unreachable, when `/ready` and `/health` are called, then `/ready` answers `503` within 1 second and `/health` answers `200`; the process keeps running and does not exit, also when the database is already unreachable at start-up (system AC-001.3)"
-      - "Given the database became unreachable after tasks were created, when it is reachable again, then within 30 seconds and without restarting the service `/ready` answers `200` and `GET /tasks` answers `200` with the tasks that existed before the outage (system AC-001.3)"
-    arguments: |
-      Storage only changes: the HTTP contract of spec 001-create-and-list-tasks (docs/specs/001-create-and-list-tasks/design.md)
-      stays exactly as it is, and its acceptance tests stay green, now against Postgres.
-      Config: `DATABASE_URL` (CloudNativePG URL with scheme `postgresql://`, user, password, host, port 5432 and database; PG* are injected too). If your driver
-      needs `postgresql+psycopg://`, rewrite the scheme in code, never in gitops. Missing `DATABASE_URL` = database unreachable.
-      Schema: ensured idempotently on the first successful connection (not only at start-up), guarded by a Postgres advisory
-      lock so two replicas starting together do not race. Order by a database-generated monotonically increasing column
-      (identity/bigserial), not by a timestamp. `id` stays an opaque uuid4 string.
-      Tests run against a real Postgres that `devbox run test` starts itself (devbox `postgresql` package with a throwaway
-      data dir per session, or an equivalent) so they pass locally and in CI with no extra service; each test starts from an
-      empty table. "Restart" and "two instances" are tested with separate `create_app()` instances on one database.
-      Smoke: keep the existing ones; a read-only `GET /tasks` -> 200 smoke must remain for staging/prod.
-    depends_on: []
-    done: false
-  - id: taskboard8-web
-    shape: web-nextjs
-    summary: Task board at the root URL that lists all tasks and adds new ones
-    acs: [AC-001.4, AC-001.5, AC-001.6, AC-001.7, AC-001.8, AC-001.9]
-    criteria:
-      - "Given the Task API at `TASK_API_URL` returns tasks from `GET /tasks`, when a person opens `/`, then the page shows one entry per task in the order the API returned them (oldest first), each with its title and its `due_date` shown exactly as the `YYYY-MM-DD` string the API sent, or `No due date` when it is `null`; the list is fetched on every request, never cached or prerendered (system AC-001.4)"
-      - "Given `GET /tasks` returns `[]`, when a person opens `/`, then the page shows `No tasks yet.` and no list, together with the form to add a task (system AC-001.5)"
-      - "Given the board is open, when a person enters the title `Buy milk`, optionally picks a due date, and submits, then the web app sends `POST /tasks` to the Task API with the trimmed title and the due date as `YYYY-MM-DD` or `null`, and without a page reload the task the API returned appears as the last entry with its title and due date (or `No due date`), both form fields are emptied, and after a reload the task is still listed (system AC-001.6)"
-      - "Given the board is open, when a person submits a title that is empty or only whitespace, then no request reaches the Task API, the page shows `Enter a title.` next to the title field and the form keeps what was entered; with a title longer than 200 characters after trimming it shows `The title can be at most 200 characters.` instead (system AC-001.7)"
-      - "Given the Task API is unreachable, answers a `5xx` status, does not answer within 5 seconds, or `TASK_API_URL` is unset, when a person opens `/`, then the page answers `200` and shows `Tasks could not be loaded. Please try again later.` instead of the list, with the form still shown (system AC-001.8)"
-      - "Given the Task API is unreachable, slow (over 5 seconds) or answers anything but `201` to `POST /tasks`, when a person submits a valid task, then the page shows `The task could not be saved. Please try again.`, the list is unchanged and the form keeps what was entered (system AC-001.8)"
-      - "Given a task whose title is `<script>alert(1)</script> & <b>bold</b>`, when a person opens the board or has just added that task, then the title is shown literally as those characters, no script runs and no text is bold (system AC-001.9)"
-    arguments: |
-      The browser never calls the Task API: the server renders the list and proxies the create (see the contract, A9).
-      `/api/health` and `/api/ready` must NOT depend on the Task API (AC-001.8 needs the page to load while it is down).
-      Show `due_date` as the string the API sent; never parse it into a Date (time-zone shifts). Render titles as React
-      text only; no dangerouslySetInnerHTML anywhere.
-      Tests: unit tests with a mocked fetch; Playwright e2e against a stub Task API (a small HTTP server implementing
-      `GET/POST /tasks` of the contract, switchable to down / 500 / slow) at `TASK_API_URL`.
-      Smoke: read-only `@smoke` "root page loads 200 and shows a list or `No tasks yet.`"; `@smoke @writes` adds
-      `smoke-<uuid>` and sees it after reload (dev only).
-      Document `TASK_API_URL` in docs/env-vars.md (server-only; never `NEXT_PUBLIC_`).
-    depends_on: []
-    done: false
-  - id: taskboard8-gitops
-    shape: gitops-app
-    summary: Declare the Postgres database, give it to the Task API and point the web app at the Task API
-    acs: [AC-001.1, AC-001.2, AC-001.3, AC-001.4, AC-001.6]
-    gitops:
-      - {resource: postgres}
-      - {uses: postgres, component: taskboard8-api}
-      - {env: {TASK_API_URL: 'http://taskboard8-api'}, component: taskboard8-web}
-    depends_on: []
-    done: false
+- id: taskboard8-api
+  shape: service-python
+  summary: Keep tasks in Postgres so they survive restarts and are shared by every instance
+  acs:
+  - AC-001.1
+  - AC-001.2
+  - AC-001.3
+  criteria:
+  - Given three tasks created through `POST /tasks` against a database, when the service is stopped and
+    a new service process is started against the same database (`DATABASE_URL`), then `GET /tasks` answers
+    `200` with exactly those three tasks, each with the same `id`, `title` and `due_date`, in the order
+    they were created (system AC-001.1)
+  - Given two service instances connected to the same database, when a task is created through `POST /tasks`
+    on one of them, then every later `GET /tasks` on either instance contains that task, and tasks created
+    alternately on both instances are listed by both in the one order they were created (system AC-001.2)
+  - Given an empty database, when a client sends `GET /tasks`, then the answer is `200` with `[]`; and
+    every rule of the unchanged task contract (`201` body with exactly `id`, `title`, `due_date`; trimmed
+    titles; `422` for an invalid title or due date with nothing stored) holds with tasks kept in the database
+    (system AC-001.1)
+  - Given the database is unreachable (stopped, wrong host, or `DATABASE_URL` unset), when a client sends
+    `GET /tasks` or a valid `POST /tasks`, then the answer is `503` within 5 seconds and no task is created;
+    an invalid `POST /tasks` still answers `422` (system AC-001.3)
+  - Given the database is unreachable, when `/ready` and `/health` are called, then `/ready` answers `503`
+    within 1 second and `/health` answers `200`; the process keeps running and does not exit, also when
+    the database is already unreachable at start-up (system AC-001.3)
+  - Given the database became unreachable after tasks were created, when it is reachable again, then within
+    30 seconds and without restarting the service `/ready` answers `200` and `GET /tasks` answers `200`
+    with the tasks that existed before the outage (system AC-001.3)
+  arguments: |
+    Storage only changes: the HTTP contract of spec 001-create-and-list-tasks (docs/specs/001-create-and-list-tasks/design.md)
+    stays exactly as it is, and its acceptance tests stay green, now against Postgres.
+    Config: `DATABASE_URL` (CloudNativePG URL with scheme `postgresql://`, user, password, host, port 5432 and database; PG* are injected too). If your driver
+    needs `postgresql+psycopg://`, rewrite the scheme in code, never in gitops. Missing `DATABASE_URL` = database unreachable.
+    Schema: ensured idempotently on the first successful connection (not only at start-up), guarded by a Postgres advisory
+    lock so two replicas starting together do not race. Order by a database-generated monotonically increasing column
+    (identity/bigserial), not by a timestamp. `id` stays an opaque uuid4 string.
+    Tests run against a real Postgres that `devbox run test` starts itself (devbox `postgresql` package with a throwaway
+    data dir per session, or an equivalent) so they pass locally and in CI with no extra service; each test starts from an
+    empty table. "Restart" and "two instances" are tested with separate `create_app()` instances on one database.
+    Smoke: keep the existing ones; a read-only `GET /tasks` -> 200 smoke must remain for staging/prod.
+  depends_on: []
+  done: true
+- id: taskboard8-web
+  shape: web-nextjs
+  summary: Task board at the root URL that lists all tasks and adds new ones
+  acs:
+  - AC-001.4
+  - AC-001.5
+  - AC-001.6
+  - AC-001.7
+  - AC-001.8
+  - AC-001.9
+  criteria:
+  - Given the Task API at `TASK_API_URL` returns tasks from `GET /tasks`, when a person opens `/`, then
+    the page shows one entry per task in the order the API returned them (oldest first), each with its
+    title and its `due_date` shown exactly as the `YYYY-MM-DD` string the API sent, or `No due date` when
+    it is `null`; the list is fetched on every request, never cached or prerendered (system AC-001.4)
+  - Given `GET /tasks` returns `[]`, when a person opens `/`, then the page shows `No tasks yet.` and
+    no list, together with the form to add a task (system AC-001.5)
+  - Given the board is open, when a person enters the title `Buy milk`, optionally picks a due date, and
+    submits, then the web app sends `POST /tasks` to the Task API with the trimmed title and the due date
+    as `YYYY-MM-DD` or `null`, and without a page reload the task the API returned appears as the last
+    entry with its title and due date (or `No due date`), both form fields are emptied, and after a reload
+    the task is still listed (system AC-001.6)
+  - Given the board is open, when a person submits a title that is empty or only whitespace, then no request
+    reaches the Task API, the page shows `Enter a title.` next to the title field and the form keeps what
+    was entered; with a title longer than 200 characters after trimming it shows `The title can be at
+    most 200 characters.` instead (system AC-001.7)
+  - Given the Task API is unreachable, answers a `5xx` status, does not answer within 5 seconds, or `TASK_API_URL`
+    is unset, when a person opens `/`, then the page answers `200` and shows `Tasks could not be loaded.
+    Please try again later.` instead of the list, with the form still shown (system AC-001.8)
+  - Given the Task API is unreachable, slow (over 5 seconds) or answers anything but `201` to `POST /tasks`,
+    when a person submits a valid task, then the page shows `The task could not be saved. Please try again.`,
+    the list is unchanged and the form keeps what was entered (system AC-001.8)
+  - Given a task whose title is `<script>alert(1)</script> & <b>bold</b>`, when a person opens the board
+    or has just added that task, then the title is shown literally as those characters, no script runs
+    and no text is bold (system AC-001.9)
+  arguments: |
+    The browser never calls the Task API: the server renders the list and proxies the create (see the contract, A9).
+    `/api/health` and `/api/ready` must NOT depend on the Task API (AC-001.8 needs the page to load while it is down).
+    Show `due_date` as the string the API sent; never parse it into a Date (time-zone shifts). Render titles as React
+    text only; no dangerouslySetInnerHTML anywhere.
+    Tests: unit tests with a mocked fetch; Playwright e2e against a stub Task API (a small HTTP server implementing
+    `GET/POST /tasks` of the contract, switchable to down / 500 / slow) at `TASK_API_URL`.
+    Smoke: read-only `@smoke` "root page loads 200 and shows a list or `No tasks yet.`"; `@smoke @writes` adds
+    `smoke-<uuid>` and sees it after reload (dev only).
+    Document `TASK_API_URL` in docs/env-vars.md (server-only; never `NEXT_PUBLIC_`).
+  depends_on: []
+  done: true
+- id: taskboard8-gitops
+  shape: gitops-app
+  summary: Declare the Postgres database, give it to the Task API and point the web app at the Task API
+  acs:
+  - AC-001.1
+  - AC-001.2
+  - AC-001.3
+  - AC-001.4
+  - AC-001.6
+  gitops:
+  - resource: postgres
+  - uses: postgres
+    component: taskboard8-api
+  - env:
+      TASK_API_URL: http://taskboard8-api
+    component: taskboard8-web
+  depends_on: []
+  done: true
 gitops_pin: []
 ---
 
