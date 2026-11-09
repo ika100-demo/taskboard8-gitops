@@ -6,4 +6,4 @@ resources:
 - service.yaml
 images:
 - name: ghcr.io/ika100-demo/taskboard8-web
-  newTag: latest
+  newTag: sha-f1638070b4972dd3e2e7f30e59055d1f1c20519b
