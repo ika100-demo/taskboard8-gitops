@@ -36,7 +36,9 @@ metadata:
 spec:
   generators:
   - list:
-      elements: []
+      elements:
+      - name: taskboard8-api
+      - name: taskboard8-web
   template:
     metadata:
       name: '{{name}}-staging'
@@ -135,6 +137,64 @@ spec:
       destination:
         server: https://kubernetes.default.svc
         namespace: taskboard8-dev
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: taskboard8-addons-staging
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - name: postgres
+  template:
+    metadata:
+      name: addon-{{name}}-staging
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/ika100-demo/taskboard8-gitops
+        targetRevision: main
+        path: applications/taskboard8/addons/staging/{{name}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: taskboard8-staging
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: taskboard8-addons-config-staging
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - name: observability
+  template:
+    metadata:
+      name: addon-{{name}}-staging
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/ika100-demo/taskboard8-gitops
+        targetRevision: main
+        path: applications/taskboard8/addons/staging/{{name}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: taskboard8-staging
       syncPolicy:
         automated:
           prune: true
