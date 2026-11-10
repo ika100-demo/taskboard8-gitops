@@ -1,0 +1,150 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: taskboard8-postgres-bucket-wait
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: taskboard8
+    app.kubernetes.io/managed-by: gitops-app
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: '1'
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taskboard8-postgres-bucket-wait
+        app.kubernetes.io/part-of: taskboard8
+        app.kubernetes.io/managed-by: gitops-app
+        app.kubernetes.io/component: bucket-wait
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: bucket-wait
+        image: python:3.13.18-alpine3.24@sha256:7984cf56ceaddebe4fefeb75d64000b9f45d8b77b11a09b24524da6cdc3af0c8
+        command:
+        - python3
+        - -c
+        - |
+          # The bucket wait (#507): exits 0 once the backup bucket answers a signed HeadBucket with 200, so the ScheduledBackup (next
+          # sync wave) takes its immediate base backup only when it can succeed. After BUCKET_WAIT_SECONDS it exits 0 anyway: the backup then
+          # runs as before, and `/system:status` reports it when it fails. Standard library only; no credential is ever printed.
+          import datetime
+          import hashlib
+          import hmac
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          EMPTY = hashlib.sha256(b"").hexdigest()
+
+
+          def _hmac(key, text):
+              return hmac.new(key, text.encode(), hashlib.sha256).digest()
+
+
+          def authorization(method, url, headers, region, service, key_id, secret):
+              """AWS Signature Version 4 of a request without a body; `headers` (lowercase names) holds host and x-amz-date."""
+              u = urllib.parse.urlsplit(url)
+              names = sorted(headers)
+              signed = ";".join(names)
+              canonical = "\n".join([method, urllib.parse.quote(u.path or "/", safe="/~"), u.query,
+                                     *("%s:%s" % (n, headers[n].strip()) for n in names), "", signed, EMPTY])
+              amz_date = headers["x-amz-date"]
+              scope = "%s/%s/%s/aws4_request" % (amz_date[:8], region, service)
+              to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+              key = _hmac(_hmac(_hmac(_hmac(("AWS4" + secret).encode(), amz_date[:8]), region), service), "aws4_request")
+              signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+              return "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s" % (key_id, scope, signed, signature)
+
+
+          def head_bucket(endpoint, bucket, region, key_id, secret):
+              """None when the bucket answers 200, else why not."""
+              url = endpoint.rstrip("/") + "/" + bucket
+              now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+              headers = {"host": urllib.parse.urlsplit(url).netloc, "x-amz-content-sha256": EMPTY, "x-amz-date": now}
+              request = urllib.request.Request(url, method="HEAD")
+              for name in ("x-amz-content-sha256", "x-amz-date"):
+                  request.add_header(name, headers[name])
+              request.add_header("Authorization", authorization("HEAD", url, headers, region, "s3", key_id, secret))
+              try:
+                  with urllib.request.urlopen(request, timeout=10) as response:
+                      return None if response.status == 200 else "HTTP %d" % response.status
+              except urllib.error.HTTPError as error:
+                  return "HTTP %d" % error.code
+              except (urllib.error.URLError, OSError) as error:
+                  return str(getattr(error, "reason", error))
+
+
+          def main():
+              env = os.environ
+              bucket = env["BUCKET_NAME"]
+              deadline = time.time() + float(env.get("BUCKET_WAIT_SECONDS", "600"))
+              last = None
+              while True:
+                  why = head_bucket(env["BUCKET_ENDPOINT"], bucket, env["BUCKET_REGION"], env["AWS_ACCESS_KEY_ID"], env["AWS_SECRET_ACCESS_KEY"])
+                  if why is None:
+                      print("bucket %s answers" % bucket, flush=True)
+                      return 0
+                  if why != last:
+                      print("waiting for bucket %s: %s" % (bucket, why), flush=True)
+                      last = why
+                  if time.time() >= deadline:
+                      print("bucket %s still does not answer (%s); going on without it" % (bucket, why), flush=True)
+                      return 0
+                  time.sleep(float(env.get("BUCKET_WAIT_INTERVAL", "5")))
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+        env:
+        - name: PYTHONDONTWRITEBYTECODE
+          value: '1'
+        - name: BUCKET_ENDPOINT
+          value: http://taskboard8-backups-filer.taskboard8-prod.svc:8333
+        - name: BUCKET_NAME
+          value: taskboard8-backups
+        - name: BUCKET_WAIT_SECONDS
+          value: '600'
+        - name: BUCKET_REGION
+          valueFrom:
+            secretKeyRef:
+              name: taskboard8-backups-app
+              key: region
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: taskboard8-backups-app
+              key: accessKeyId
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: taskboard8-backups-app
+              key: secretAccessKey
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65534
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
